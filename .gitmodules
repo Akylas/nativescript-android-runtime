@@ -6,5 +6,5 @@
 	url = https://github.com/NativeScript/common-runtime-tests-app.git
 [submodule "test-app/build-tools/android-dts-generator"]
 	path = test-app/build-tools/android-dts-generator
-	url = https://github.com/NativeScript/android-dts-generator.git
+	url = https://github.com/Akylas/android-dts-generator.git
 	branch = master
