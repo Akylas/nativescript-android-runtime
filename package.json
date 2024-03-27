@@ -1,5 +1,5 @@
 {
-  "name": "@nativescript/android",
+  "name": "@akylas/nativescript-android-runtime",
   "description": "NativeScript for Android using v8",
   "version": "8.6.2",
   "repository": {
