@@ -40,10 +40,6 @@ public class NativeScriptException extends RuntimeException implements Serializa
         return incomingStackTrace;
     }
 
-    public StackTraceElement[] getStackTrace() {
-        return (StackTraceElement[])this.getOurStackTrace().clone();
-    }
-
     @RuntimeCallable
     public static String getStackTraceAsString(Throwable ex) {
         String errMessage = "";
