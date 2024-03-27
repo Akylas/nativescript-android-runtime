@@ -1,7 +1,10 @@
 package com.tns;
 
-@SuppressWarnings("serial")
-public class NativeScriptException extends RuntimeException {
+import java.io.Serializable;
+
+public class NativeScriptException extends RuntimeException implements Serializable {
+    private static final long serialVersionUID = 361498821763191266L;
+
     @SuppressWarnings("unused")
     private long jsValueAddress = 0;
     private String incomingStackTrace;
@@ -35,6 +38,10 @@ public class NativeScriptException extends RuntimeException {
 
     public String getIncomingStackTrace() {
         return incomingStackTrace;
+    }
+
+    public StackTraceElement[] getStackTrace() {
+        return (StackTraceElement[])this.getOurStackTrace().clone();
     }
 
     @RuntimeCallable
