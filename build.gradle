@@ -17,9 +17,14 @@ import groovy.json.JsonOutput
 def onlyX86 = project.hasProperty("onlyX86")
 def useCCache = !project.hasProperty("noCCache")
 def hasNdkVersion = project.hasProperty("ndkVersion")
+def hasNdkDirectory = project.hasProperty("ndkDirectory")
 
 if (hasNdkVersion) {
     println "Using NDK version " + ndkVersion
+}
+
+if (hasNdkDirectory) {
+    println "Using NDK " + ndkDirectory
 }
 
 def isWinOs = System.properties['os.name'].toLowerCase().contains('windows')
@@ -197,6 +202,9 @@ def getAssembleReleaseBuildArguments = { ->
     }
     if (hasNdkVersion) {
         arguments.add("-PndkVersion="+ndkVersion)
+    }
+    if (hasNdkDirectory) {
+        arguments.add("-PndkDirectory="+ndkDirectory)
     }
     arguments += ["--warning-mode", "all"]
     return arguments
