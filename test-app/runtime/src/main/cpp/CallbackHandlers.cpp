@@ -741,10 +741,10 @@ void CallbackHandlers::DrainMicrotaskCallback(const v8::FunctionCallbackInfo<v8:
 }
 
 void CallbackHandlers::TimeCallback(const v8::FunctionCallbackInfo<v8::Value> &args) {
-    auto nano = std::chrono::time_point_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now());
-    double duration = nano.time_since_epoch().count();
-    args.GetReturnValue().Set(duration);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    double result = ((now.tv_sec*1000000000LL + now.tv_nsec) / 1000000.0);
+    args.GetReturnValue().Set(result);
 }
 
 void CallbackHandlers::ReleaseNativeCounterpartCallback(
