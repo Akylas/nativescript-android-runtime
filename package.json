@@ -14,8 +14,8 @@
     "gradle": "8.4",
     "gradleAndroid": "8.3.2",
     "ndk": "r23c",
-    "ndkApiLevel": "17",
-    "minSdk": "17",
+    "ndkApiLevel": "21",
+    "minSdk": "21",
     "compileSdk": "34",
     "buildTools": "34.0.0",
     "kotlin": "2.0.0"
