@@ -52,6 +52,7 @@ include_directories(
         src/main/cpp
         src/main/cpp/include
         src/main/cpp/v8_inspector
+        src/main/cpp/ada
 )
 
 if (OPTIMIZED_BUILD OR OPTIMIZED_WITH_INSPECTOR_BUILD)
@@ -69,9 +70,9 @@ if (NOT OPTIMIZED_BUILD OR OPTIMIZED_WITH_INSPECTOR_BUILD)
         INSPECTOR_SOURCES
 
         src/main/cpp/com_tns_AndroidJsV8Inspector.cpp
-        src/main/cpp/DOMDomainCallbackHandlers.cpp
         src/main/cpp/JsV8InspectorClient.cpp
-        src/main/cpp/NetworkDomainCallbackHandlers.cpp
+        src/main/cpp/v8_inspector/ns-v8-tracing-agent-impl.cpp
+        src/main/cpp/v8_inspector/Utils.cpp
     )
 else ()
     # When building in Release mode we do not include the V8 inspector sources
@@ -137,6 +138,9 @@ add_library(
         src/main/cpp/conversions/objects/JSToJavaObjectsConverter.cpp
         src/main/cpp/conversions/arrays/JSToJavaArraysConverter.cpp
         src/main/cpp/conversions/primitives/JSToJavaPrimitivesConverter.cpp
+        src/main/cpp/ada/ada.cpp
+        src/main/cpp/URLImpl.cpp
+        src/main/cpp/URLSearchParamsImpl.cpp
 
         # V8 inspector source files will be included only in Release mode
         ${INSPECTOR_SOURCES}
