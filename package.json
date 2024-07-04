@@ -26,12 +26,14 @@
     "android": "8.3.2"
   },
   "scripts": {
-    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
-    "version": "npm run changelog && git add CHANGELOG.md"
+    "version": "standard-version"
   },
   "devDependencies": {
-    "conventional-changelog-cli": "^2.1.1",
     "dayjs": "^1.11.7",
-    "semver": "^7.5.0"
-  }
+    "semver": "^7.6.2",
+    "standard-version": "^9.5.0"
+  },
+  "workspaces": [
+    "test-app/build-tools/jsparser"
+  ]
 }

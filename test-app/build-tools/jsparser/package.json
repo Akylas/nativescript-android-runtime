@@ -13,12 +13,12 @@
     "@babel/parser": "~7.17.12",
     "@babel/plugin-proposal-decorators": "~7.17.12",
     "@babel/traverse": "~7.17.12",
-    "@babel/types": "~7.17.12",
+    "@babel/types": "~7.24.7",
     "split": "1.0.1"
   },
   "repository": "https://github.com/NativeScript/android-runtime",
   "devDependencies": {
-    "webpack": "5.91.0",
+    "webpack": "5.92.1",
     "webpack-cli": "5.1.4"
   }
 }
