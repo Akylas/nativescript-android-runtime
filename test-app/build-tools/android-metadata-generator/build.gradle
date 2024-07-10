@@ -2,8 +2,8 @@ apply plugin: 'java'
 apply plugin: 'kotlin'
 
 java {
-    sourceCompatibility = '17'
-    targetCompatibility = '17'
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 // todo: check if still needed
@@ -23,7 +23,9 @@ buildscript {
     }
 
     dependencies {
-        classpath "com.android.tools.build:gradle:$NS_DEFAULT_ANDROID_BUILD_TOOLS_VERSION"
+        def computeBuildToolsVersion = { -> project.hasProperty("androidBuildToolsVersion") ? androidBuildToolsVersion : "${NS_DEFAULT_ANDROID_BUILD_TOOLS_VERSION}" }
+
+        classpath "com.android.tools.build:gradle:$computeBuildToolsVersion"
     }
 }
 

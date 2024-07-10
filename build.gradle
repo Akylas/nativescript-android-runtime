@@ -134,11 +134,28 @@ task getCommitVersion {
 task generateDtsgJar(type: Exec) {
     doFirst {
         workingDir "$TEST_APP_PATH"
+        def arguments = []
         if (isWinOs) {
-            commandLine "cmd", "/c", "gradlew", ":dts-generator:jar", "--warning-mode", "all"
+            arguments += ["cmd", "/c", "gradlew"]
         } else {
-            commandLine "./gradlew", ":dts-generator:jar", "--warning-mode", "all"
+            arguments.add("./gradlew")
         }
+        arguments.add(":dts-generator:jar")
+        if (hasNdkVersion) {
+            arguments.add("-PndkVersion="+ndkVersion)
+        }
+        if (hasNdkDirectory) {
+            arguments.add("-PndkDirectory="+ndkDirectory)
+        }
+
+        if (project.hasProperty("targetSdk")) {
+            arguments.add("-PtargetSdk="+project.targetSdk)
+        }
+        if (project.hasProperty("minSdk")) {
+            arguments.add("-PminSdk="+project.minSdk)
+        }
+        arguments += ["--warning-mode", "all"]
+        commandLine arguments
     }
 }
 
@@ -206,7 +223,14 @@ def getAssembleReleaseBuildArguments = { ->
     if (hasNdkDirectory) {
         arguments.add("-PndkDirectory="+ndkDirectory)
     }
+    if (project.hasProperty("targetSdk")) {
+        arguments.add("-PtargetSdk="+project.targetSdk)
+    }
+    if (project.hasProperty("minSdk")) {
+        arguments.add("-PminSdk="+project.minSdk)
+    }
     arguments += ["--warning-mode", "all"]
+    println "getAssembleReleaseBuildArguments " + arguments
     return arguments
 }
 
@@ -356,11 +380,21 @@ task copyPackageJson(type: Copy) {
     into "$DIST_PATH"
 }
 
-task setPackageVersionInPackageJsonFile {
+task setPackageVersionsInPackageJsonFile {
     doLast {
+        def props = new Properties()
+        file("test-app/gradle.properties").withInputStream { props.load(it) }
+        def computeBuildToolsVersion = { -> project.hasProperty("androidBuildToolsVersion") ? androidBuildToolsVersion : "${props.NS_DEFAULT_ANDROID_BUILD_TOOLS_VERSION}" }
+        def computeKotlinVersion = { -> project.hasProperty("kotlinVersion") ? kotlinVersion : "${props.ns_default_kotlin_version}" }
+
         def inputFile = new File("$DIST_PATH/package.json")
         def json = new JsonSlurper().parseText(inputFile.text)
         json.version = pVersion
+        json.version_info.minSdk = json.version_info.ndkApiLevel = project.hasProperty("minSdk") ? minSdk : props.NS_DEFAULT_MIN_SDK_VERSION
+        json.version_info.compileSdk = project.hasProperty("targetSdk") ? targetSdk : props.NS_DEFAULT_COMPILE_SDK_VERSION
+        json.version_info.ndk = project.hasProperty("ndkVersion") ? ndkVersion : "${props.NS_DEFAULT_NDK_VERSION}" 
+        json.version_info.gradleAndroid = json.gradle.android = computeBuildToolsVersion()
+        json.version_info.kotlin = computeKotlinVersion()
         def jb = new JsonBuilder(json)
         inputFile.text = JsonOutput.prettyPrint(jb.toString())
     }
@@ -404,8 +438,8 @@ if (generateRegularRuntimePackage) {
 copyFilesToProjectTemeplate.dependsOn(buildJsParser)
 copyProjectTemplate.dependsOn(copyFilesToProjectTemeplate)
 copyPackageJson.dependsOn(copyProjectTemplate)
-setPackageVersionInPackageJsonFile.dependsOn(copyPackageJson)
-copyReadme.dependsOn(setPackageVersionInPackageJsonFile)
+setPackageVersionsInPackageJsonFile.dependsOn(copyPackageJson)
+copyReadme.dependsOn(setPackageVersionsInPackageJsonFile)
 createNpmPackage.dependsOn(copyReadme)
 
 task createPackage {

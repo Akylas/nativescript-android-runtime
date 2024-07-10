@@ -21,12 +21,18 @@ if (useCCache) {
 }
 
 
-def defaultNdkVersion = "23.2.8568313"
+def defaultNdkVersion = NS_DEFAULT_NDK_VERSION
 
 def hasNdkVersion = project.hasProperty("ndkVersion")
 if (hasNdkVersion) {
     println "Runtime using NDK version " + ndkVersion
 }
+
+def minSdkVer = project.hasProperty("minSdk") ? minSdk : NS_DEFAULT_MIN_SDK_VERSION as int 
+def targetSdkVer = project.hasProperty("targetSdk") ? targetSdk : NS_DEFAULT_COMPILE_SDK_VERSION as int 
+
+println "Runtime using minSdkVersion " + minSdkVer
+println "Runtime using targetSdkVersion " + targetSdkVer
 
 
 def NDK_PATH = ""
@@ -93,8 +99,8 @@ android {
     }
 
     defaultConfig {
-        minSdkVersion NS_DEFAULT_MIN_SDK_VERSION as int
-        targetSdkVersion NS_DEFAULT_COMPILE_SDK_VERSION as int
+        minSdkVersion minSdkVer
+        targetSdkVersion targetSdkVer
 
         externalNativeBuild {
             cmake {
@@ -114,12 +120,12 @@ android {
 //                arguments "-DANDROID_TOOLCHAIN=clang", "-DANDROID_STL=c++_static", "-DANDROID_NDK_ROOT=${NDK_PATH}"
 
                 cppFlags "-std=c++14"
-                arguments "-DANDROID_STL=c++_shared", "-DANDROID_NDK_ROOT=${NDK_PATH}"
+                arguments "-DANDROID_STL=c++_shared", "-DANDROID_MIN_SDK=${minSdkVer}", "-DANDROID_NDK_ROOT=${NDK_PATH}"
             }
         }
 
         ndk {
-            minSdkVersion NS_DEFAULT_MIN_SDK_VERSION as int
+            minSdkVersion minSdkVer
             if (onlyX86) {
                 abiFilters 'x86'
             } else {
