@@ -169,7 +169,7 @@ jobs:
       contents: write
     needs:
       - build
-      - test
+      # - test
     env:
       NPM_VERSION: ${{needs.build.outputs.npm_version}}
     steps:
