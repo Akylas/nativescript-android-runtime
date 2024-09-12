@@ -82,7 +82,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: npm-package
-          path: dist/nativescript-android-${{steps.npm_version_output.outputs.NPM_VERSION}}.tgz
+          path: dist/akylas-nativescript-android-runtime-${{steps.npm_version_output.outputs.NPM_VERSION}}.tgz
   test:
     name: Test
     runs-on: macos-latest
@@ -157,8 +157,8 @@ jobs:
           path: dist
       - name: Publish package
         run: |
-          echo "Publishing @akylas/nativescript-android-runtime@$NPM_VERSION to NPM with tag $NPM_TAG..."
-          npm publish ./dist/nativescript-android-${{env.NPM_VERSION}}.tgz --tag $NPM_TAG --provenance
+          echo "Publishing @akylas/akylas-nativescript-android-runtime-runtime@$NPM_VERSION to NPM with tag $NPM_TAG..."
+          npm publish ./dist/akylas-nativescript-android-runtime-${{env.NPM_VERSION}}.tgz --tag $NPM_TAG --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
   github-release:
@@ -189,6 +189,6 @@ jobs:
         run: npx conventional-changelog -p angular -r2 > body.md
       - uses: ncipollo/release-action@v1
         with:
-          artifacts: "dist/nativescript-android-*.tgz"
+          artifacts: "dist/akylas-nativescript-android-runtime-*.tgz"
           bodyFile: "body.md"
           prerelease: ${{needs.build.outputs.npm_tag != 'latest'}}
