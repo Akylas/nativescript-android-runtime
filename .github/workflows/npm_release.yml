@@ -50,7 +50,7 @@ jobs:
 
       - name: echo NDK
         run: |
-          export ANDROID_NDK_HOME=`pwd`/android-ndk-${{env.NDK_VERSION}}
+          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
           echo ANDROID_NDK_HOME=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ANDROID_NDK=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ${ANDROID_NDK_HOME} >> $GITHUB_PATH
@@ -116,7 +116,7 @@ jobs:
 
       - name: echo NDK
         run: |
-          export ANDROID_NDK_HOME=`pwd`/android-ndk-${{env.NDK_VERSION}}
+          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
           echo ANDROID_NDK_HOME=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ANDROID_NDK=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ${ANDROID_NDK_HOME} >> $GITHUB_PATH
