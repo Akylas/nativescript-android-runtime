@@ -1,3 +1,53 @@
+## [8.8.4](https://github.com/NativeScript/android/compare/v8.8.3...v8.8.4) (2024-09-06)
+
+
+### Bug Fixes
+
+* ensure same mtime for js and code cache to prevent loading old code caches ([#1822](https://github.com/NativeScript/android/issues/1822)) ([3d6e101](https://github.com/NativeScript/android/commit/3d6e10115227ad556e5bbe1764217716ab5bdac7))
+
+
+
+## [8.8.3](https://github.com/NativeScript/android/compare/v8.8.2...v8.8.3) (2024-09-02)
+
+
+### Bug Fixes
+
+* generate correct metadata when overflowing signed short values ([#1821](https://github.com/NativeScript/android/issues/1821)) ([c9fac4b](https://github.com/NativeScript/android/commit/c9fac4b19a952d4df651d3d6a8b0fa9c50f7c7db))
+
+
+
+## [8.8.2](https://github.com/NativeScript/android/compare/v8.8.1...v8.8.2) (2024-07-22)
+
+
+### Bug Fixes
+
+* config with multiple bundle ids ([#1816](https://github.com/NativeScript/android/issues/1816)) ([cdcfee2](https://github.com/NativeScript/android/commit/cdcfee266617472ac7f3ac59742b858ad093e46b))
+
+
+
+## [8.8.1](https://github.com/NativeScript/android/compare/v8.8.0...v8.8.1) (2024-07-10)
+
+
+### Features
+
+* Ada 2.9 ([#1814](https://github.com/NativeScript/android/issues/1814)) ([91accf9](https://github.com/NativeScript/android/commit/91accf9be1caf9ad2accb80bf9aca18efe4dd75a))
+
+
+
+# [8.8.0](https://github.com/NativeScript/android/compare/v8.7.0...v8.8.0) (2024-07-09)
+
+
+### Bug Fixes
+
+* correctly load ts_helpers.js in workers ([#1798](https://github.com/NativeScript/android/issues/1798)) ([31f8501](https://github.com/NativeScript/android/commit/31f8501bb902815cfed8e1cd123fe8b6de2cb757))
+
+
+### Features
+
+* Kotlin 2 + Gradle 8+ ([#1812](https://github.com/NativeScript/android/issues/1812)) ([d4b7164](https://github.com/NativeScript/android/commit/d4b716427934ebb4387a04842561d5b5d0e1fa3d))
+
+
+
 # [8.7.0](https://github.com/NativeScript/android/compare/v8.7.0-rc.3...v8.7.0) (2024-04-08)
 
 

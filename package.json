@@ -1,7 +1,7 @@
 {
   "name": "@akylas/nativescript-android-runtime",
   "description": "NativeScript for Android using v8",
-  "version": "8.8.0-alpha.11",
+  "version": "8.8.4",
   "repository": {
     "type": "git",
     "url": "https://github.com/NativeScript/android.git"
