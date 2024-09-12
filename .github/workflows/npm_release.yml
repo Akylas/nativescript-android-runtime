@@ -45,12 +45,12 @@ jobs:
         id: setup-ndk
         with:
           local-cache: true
-          ndk-version: $NDK_VERSION
+          ndk-version: ${{env.NDK_VERSION}}
           add-to-path: false
 
       - name: echo NDK
         run: |
-          export ANDROID_NDK_HOME=`pwd`/android-ndk-$NDK_VERSION
+          export ANDROID_NDK_HOME=`pwd`/android-ndk-${{env.NDK_VERSION}}
           echo ANDROID_NDK_HOME=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ANDROID_NDK=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ${ANDROID_NDK_HOME} >> $GITHUB_PATH
@@ -111,12 +111,12 @@ jobs:
         id: setup-ndk
         with:
           local-cache: true
-          ndk-version: $NDK_VERSION
+          ndk-version: ${{env.NDK_VERSION}}
           add-to-path: false
 
       - name: echo NDK
         run: |
-          export ANDROID_NDK_HOME=`pwd`/android-ndk-$NDK_VERSION
+          export ANDROID_NDK_HOME=`pwd`/android-ndk-${{env.NDK_VERSION}}
           echo ANDROID_NDK_HOME=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ANDROID_NDK=${ANDROID_NDK_HOME} >> $GITHUB_ENV
           echo ${ANDROID_NDK_HOME} >> $GITHUB_PATH
