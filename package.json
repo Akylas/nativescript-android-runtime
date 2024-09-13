@@ -29,6 +29,7 @@
     "version": "standard-version"
   },
   "devDependencies": {
+    "conventional-changelog-cli": "^5.0.0",
     "dayjs": "^1.11.7",
     "semver": "^7.6.2",
     "standard-version": "^9.5.0"
