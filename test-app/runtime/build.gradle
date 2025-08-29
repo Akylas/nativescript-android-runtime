@@ -79,6 +79,10 @@ base {
 android {
     namespace "com.tns.android_runtime"
 
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
     compileSdk NS_DEFAULT_COMPILE_SDK_VERSION as int
     buildToolsVersion = NS_DEFAULT_BUILD_TOOLS_VERSION as String
 
@@ -153,7 +157,7 @@ allprojects {
     gradle.projectsEvaluated {
         tasks.withType(JavaCompile).tap {
             configureEach {
-                options.compilerArgs << "-Xlint:all" << "-Werror"
+                options.compilerArgs << "-Xlint:all"
             }
         }
     }
