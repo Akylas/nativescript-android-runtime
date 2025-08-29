@@ -1,7 +1,7 @@
 # documentation: https://d.android.com/studio/projects/add-native-code.html
 
 # Command info: https://cmake.org/cmake/help/v3.4/command/cmake_minimum_required.html
-cmake_minimum_required(VERSION 3.4.1)
+cmake_minimum_required(VERSION 3.18.1)
 
 project(NativeScriptAndroidRuntime)
 
@@ -18,12 +18,15 @@ endif (CCACHE_FOUND AND (USE_CCACHE))
 # "-DANDROID_STL=c++_static" is just not enough for clang++ to find some libraries in the ndk
 MESSAGE(STATUS "## ANDROID_NDK_ROOT: " ${ANDROID_NDK_ROOT})
 
-set(COMMON_CMAKE_ARGUMENTS "-std=c++17 -Werror -Wno-unused-result -mstackrealign -fexceptions -fno-builtin-stpcpy -fno-rtti -DV8_31BIT_SMIS_ON_64BIT_ARCH -DV8_31BIT_SMIS_ON_64BIT_ARCH -DV8_ENABLE_REGEXP_INTERPRETER_THREADED_DISPATCH -DV8_EMBEDDED_BUILTINS")
+
+set(COMMON_CMAKE_ARGUMENTS "-std=c++20 -Werror -Wno-unused-result -mstackrealign -fexceptions -fno-builtin-stpcpy -fno-rtti -DV8_31BIT_SMIS_ON_64BIT_ARCH -DV8_31BIT_SMIS_ON_64BIT_ARCH -DV8_ENABLE_REGEXP_INTERPRETER_THREADED_DISPATCH -DV8_EMBEDDED_BUILTINS  -Wno-vla-extension -Wno-deprecated -Wno-vla-cxx-extension")
+
 
 if("${ANDROID_ABI}" MATCHES "arm64-v8a$" OR "${ANDROID_ABI}" MATCHES "x86_64$")
     # Enable pointer compression on 64 bit platforms
     set(COMMON_CMAKE_ARGUMENTS "${COMMON_CMAKE_ARGUMENTS} -DV8_COMPRESS_POINTERS")
 endif()
+
 
 # AOSP has switched to using LLD by default and the NDK will use it by default in the next release.
 # BFD and Gold will be removed once LLD has been through a release cycle with no major unresolved issues (estimated r21)
@@ -115,6 +118,7 @@ add_library(
         src/main/cpp/MetadataNode.cpp
         src/main/cpp/MetadataReader.cpp
         src/main/cpp/MetadataTreeNode.cpp
+        src/main/cpp/MetadataEntry.cpp
         src/main/cpp/MethodCache.cpp
         src/main/cpp/ModuleBinding.cpp
         src/main/cpp/ModuleInternal.cpp
@@ -141,6 +145,7 @@ add_library(
         src/main/cpp/ada/ada.cpp
         src/main/cpp/URLImpl.cpp
         src/main/cpp/URLSearchParamsImpl.cpp
+        src/main/cpp/URLPatternImpl.cpp
 
         # V8 inspector source files will be included only in Release mode
         ${INSPECTOR_SOURCES}
@@ -162,6 +167,7 @@ else ()
     )
 endif ()
 
+
 MESSAGE(STATUS "# General cmake Info")
 MESSAGE(STATUS "# PROJECT_SOURCE_DIR: " ${PROJECT_SOURCE_DIR})
 MESSAGE(STATUS "# CMAKE_VERSION: " ${CMAKE_VERSION})
@@ -176,12 +182,6 @@ MESSAGE(STATUS "# ANDROID_MIN_SDK: " ${ANDROID_MIN_SDK})
 target_link_libraries(NativeScript ${PROJECT_SOURCE_DIR}/src/main/libs/${ANDROID_ABI}/libzip.a)
 target_link_libraries(NativeScript ${PROJECT_SOURCE_DIR}/src/main/libs/${ANDROID_ABI}/libv8_monolith.a)
 
-if("${ANDROID_MIN_SDK}" LESS_EQUAL "20" AND ("${ANDROID_ABI}" MATCHES "armeabi-v7a$" OR "${ANDROID_ABI}" MATCHES "x86$"))
-    # On API Level 19 and lower we need to link with android_support
-    # because it contains some implementation of functions such as "strtoll" and "strtoul"
-    MESSAGE(STATUS "# Linking with libandroid_support.a")
-    target_link_libraries(NativeScript ${ANDROID_NDK_ROOT}/sources/cxx-stl/llvm-libc++/libs/${ANDROID_ABI}/libandroid_support.a)
-endif()
 
 # Command info: https://cmake.org/cmake/help/v3.4/command/find_library.html
 # Searches for a specified prebuilt library and stores the path as a

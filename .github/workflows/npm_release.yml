@@ -6,8 +6,8 @@ on:
 env:
   NPM_TAG: "next"
   EMULATOR_NAME: "runtime-emu"
-  NDK_VERSION: r23c
-  ANDROID_API: 29
+  NDK_VERSION: r27
+  ANDROID_API: 33
   ANDROID_ABI: x86_64
   NDK_ARCH: darwin
 
@@ -27,13 +27,14 @@ jobs:
       - name: setup node
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
           cache: 'npm'
 
       - uses: actions/setup-java@v4
         with:
           distribution: "temurin"
-          java-version: "17"
+          java-version: "21"
           cache: gradle
 
       - name: Setup Android SDK
@@ -77,48 +78,49 @@ jobs:
       - name: Build npm package
         run: ./gradlew -PgitCommitVersion=${{ github.sha }} -PnoCCache --stacktrace
       - name: Upload npm package artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: npm-package
           path: dist/akylas-nativescript-android-runtime-${{steps.npm_version_output.outputs.NPM_VERSION}}.tgz
+      - name: Upload debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-symbols
+          path: test-app/runtime/build/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib/*
+        
   # test:
   #   name: Test
-  #   runs-on: macos-latest
+  #   runs-on: macos-13
   #   needs: build
   #   steps:
   #     - uses: actions/checkout@v3
   #       with:
   #         submodules: true
-
-  #     - name: setup node
-  #       uses: actions/setup-node@v4
+  #     - uses: actions/setup-node@v3
   #       with:
-  #         node-version: lts/*
-  #         cache: 'npm'
-
-  #     - uses: actions/setup-java@v4
+  #         node-version: 22
+  #         registry-url: "https://registry.npmjs.org"
+  #     - uses: actions/setup-java@v3
   #       with:
   #         distribution: "temurin"
-  #         java-version: "17"
+  #         java-version: "21"
   #         cache: gradle
-
   #     - name: Setup Android SDK
-  #       uses: android-actions/setup-android@v3
-
-  #     - uses: nttld/setup-ndk@v1
-  #       id: setup-ndk
-  #       with:
-  #         local-cache: true
-  #         ndk-version: ${{env.NDK_VERSION}}
-  #         add-to-path: false
-
-  #     - name: echo NDK
+  #       uses: android-actions/setup-android@v2
+  #     - name: Homebrew dependencies
   #       run: |
-  #         export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+  #         brew install wget
+  #     - name: Setup NDK
+  #       run: |
+  #         echo "y" | sdkmanager "cmake;3.6.4111459"
+  #         wget https://dl.google.com/android/repository/android-ndk-$NDK_VERSION-$NDK_ARCH.zip
+  #         chmod +x android-ndk-$NDK_VERSION-$NDK_ARCH.zip
+  #         unzip -q android-ndk-$NDK_VERSION-$NDK_ARCH.zip
+  #         rm -rf android-ndk-$NDK_VERSION-$NDK_ARCH.zip
+  #         export ANDROID_NDK_HOME=`pwd`/android-ndk-$NDK_VERSION
   #         echo ANDROID_NDK_HOME=${ANDROID_NDK_HOME} >> $GITHUB_ENV
   #         echo ANDROID_NDK=${ANDROID_NDK_HOME} >> $GITHUB_ENV
   #         echo ${ANDROID_NDK_HOME} >> $GITHUB_PATH
-
   #     - name: Install Dependencies
   #       run: |
   #         npm install
@@ -146,9 +148,9 @@ jobs:
     steps:
       - uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 22
           registry-url: "https://registry.npmjs.org"
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: npm-package
           path: dist
@@ -175,14 +177,14 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 22
       - name: Setup
         run: npm install
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: npm-package
           path: dist
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: debug-symbols
           path: dist/debug-symbols

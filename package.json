@@ -1,7 +1,7 @@
 {
   "name": "@akylas/nativescript-android-runtime",
   "description": "NativeScript for Android using v8",
-  "version": "8.8.5",
+  "version": "8.9.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/Akylas/nativescript-android-runtime"
@@ -11,19 +11,19 @@
   ],
   "version_info": {
     "v8": "10.3.22.0",
-    "gradle": "8.4",
-    "gradleAndroid": "8.3.2",
-    "ndk": "r23c",
-    "ndkApiLevel": "17",
-    "minSdk": "17",
-    "compileSdk": "34",
-    "buildTools": "34.0.0",
+    "gradle": "8.14.3",
+    "gradleAndroid": "8.12.1",
+    "ndk": "r27",
+    "ndkApiLevel": "21",
+    "minSdk": "21",
+    "compileSdk": "35",
+    "buildTools": "35.0.0",
     "kotlin": "2.0.0"
   },
   "// this gradle key is here for backwards compatibility - we'll phase it out slowly...": "",
   "gradle": {
-    "version": "8.4",
-    "android": "8.3.2"
+    "version": "8.14.3",
+    "android": "8.12.1"
   },
   "scripts": {
     "version": "standard-version"
