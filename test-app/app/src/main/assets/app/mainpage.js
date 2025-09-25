@@ -71,3 +71,5 @@ require("./tests/testPostFrameCallback");
 require("./tests/console/logTests.js");
 require('./tests/testURLImpl.js');
 require('./tests/testURLSearchParamsImpl.js');
+require('./tests/testPerformanceNow');
+require('./tests/testQueueMicrotask');
