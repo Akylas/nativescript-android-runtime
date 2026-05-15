@@ -122,6 +122,7 @@ add_library(
         src/main/cpp/MethodCache.cpp
         src/main/cpp/ModuleBinding.cpp
         src/main/cpp/ModuleInternal.cpp
+        src/main/cpp/ModuleInternalCallbacks.cpp
         src/main/cpp/NativeScriptException.cpp
         src/main/cpp/NumericCasts.cpp
         src/main/cpp/ObjectManager.cpp
@@ -146,6 +147,8 @@ add_library(
         src/main/cpp/URLImpl.cpp
         src/main/cpp/URLSearchParamsImpl.cpp
         src/main/cpp/URLPatternImpl.cpp
+        src/main/cpp/HMRSupport.cpp
+        src/main/cpp/DevFlags.cpp
 
         # V8 inspector source files will be included only in Release mode
         ${INSPECTOR_SOURCES}

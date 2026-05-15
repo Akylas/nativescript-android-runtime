@@ -136,6 +136,8 @@ android {
                 abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
             }
         }
+
+        consumerProguardFiles 'consumer-rules.pro'
     }
 
     compileOptions {
@@ -162,8 +164,11 @@ allprojects {
  afterEvaluate {
     tasks.withType(JavaCompile).configureEach {
         // remove after "-Xlint:-classfile" https://issuetracker.google.com/issues/359561906
-        // todo remove "-Xlint:-this-escape" after updating runtime-binding-generator
-         options.compilerArgs << "-Xlint:all" << "-Werror" << "-Xlint:-classfile" << "-Xlint:-this-escape"
+        options.compilerArgs << "-Xlint:all" << "-Werror" << "-Xlint:-classfile"
+        if (javaVersion.current() >= JavaVersion.VERSION_21) {
+            // todo remove "-Xlint:-this-escape" after updating runtime-binding-generator
+            options.compilerArgs << "-Xlint:-this-escape"
+        }
     }
   }
 }

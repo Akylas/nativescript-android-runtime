@@ -1,3 +1,69 @@
+## [9.0.4](https://github.com/NativeScript/android/compare/v9.0.3...v9.0.4) (2026-04-29)
+
+
+### Bug Fixes
+
+* implement optimized native method registration for Android 8-11 ([#1942](https://github.com/NativeScript/android/issues/1942)) ([3c956cf](https://github.com/NativeScript/android/commit/3c956cfcae81ca1b996a0cc34fea1ebd2638397a))
+
+
+
+## [9.0.3](https://github.com/NativeScript/android/compare/v9.0.2...v9.0.3) (2026-04-24)
+
+
+### Bug Fixes
+
+* circular dependencies when using proguard ([#1910](https://github.com/NativeScript/android/issues/1910)) ([49da71b](https://github.com/NativeScript/android/commit/49da71bd49b567361cb8a1651fc9fa194df6714b))
+* ensure dex cache directory exists before proxy generation ([#1938](https://github.com/NativeScript/android/issues/1938)) ([2b6cb03](https://github.com/NativeScript/android/commit/2b6cb03caeb59ce2a17101817c4f03c36b055fde))
+* jsparser report webpack failure ([#1797](https://github.com/NativeScript/android/issues/1797)) ([e963d6c](https://github.com/NativeScript/android/commit/e963d6c880586ddff768663e34fc11487b21081c))
+* multithreadedJS should use concurrent java maps ([#1920](https://github.com/NativeScript/android/issues/1920)) ([1fd144f](https://github.com/NativeScript/android/commit/1fd144f8c1ef3c16796860460a9ecf6be27e2762))
+* select correct runtime when calling from different threads and improve error message ([#1906](https://github.com/NativeScript/android/issues/1906)) ([df4e81b](https://github.com/NativeScript/android/commit/df4e81b8ba11f7f70fe5aea3f8b496658576f5d0))
+
+
+### Features
+
+* add `@CriticalNative` and `@FastNative` to safe methods ([#1921](https://github.com/NativeScript/android/issues/1921)) ([085bc4f](https://github.com/NativeScript/android/commit/085bc4f67912ba25dc60ad11beee30a6d180a53e))
+* improved error logging for NativeScript exceptions ([#1908](https://github.com/NativeScript/android/issues/1908)) ([e924542](https://github.com/NativeScript/android/commit/e924542e24a45ef550a1616ec3480bf9a9738266))
+
+
+
+## [9.0.2](https://github.com/NativeScript/android/compare/v9.0.1...v9.0.2) (2026-01-04)
+
+
+### Features
+
+* remote module security ([#1899](https://github.com/NativeScript/android/issues/1899)) ([5ceb3d4](https://github.com/NativeScript/android/commit/5ceb3d4ed49d11256f751be587925c05397e9b11))
+
+
+
+## [9.0.1](https://github.com/NativeScript/android/compare/v9.0.0...v9.0.1) (2025-12-14)
+
+
+### Bug Fixes
+
+* http realm cache key with query params ([#1896](https://github.com/NativeScript/android/issues/1896)) ([288491f](https://github.com/NativeScript/android/commit/288491fb0f5ce0f296285a878ba6ac34f78f299b))
+* improve reThrowToJava exception handling and runtime retrieval logic ([#1886](https://github.com/NativeScript/android/issues/1886)) ([c05e283](https://github.com/NativeScript/android/commit/c05e283823f1ddab43cefa3c9e828b3e66c97794))
+* proguard builds ([#1887](https://github.com/NativeScript/android/issues/1887)) ([3ecd707](https://github.com/NativeScript/android/commit/3ecd707be4494e26050bacc8d1916d22c5dd6433))
+* URLSearchParams.forEach() crash and spec compliance ([#1895](https://github.com/NativeScript/android/issues/1895)) ([3e61cef](https://github.com/NativeScript/android/commit/3e61cef4e90a7d3b27155ca38d69e6ce59dc0d2e))
+
+
+
+# [9.0.0](https://github.com/NativeScript/android/compare/v8.9.2...v9.0.0) (2025-11-17)
+
+
+### Bug Fixes
+
+* prevent crash when jweak points to null ([#1881](https://github.com/NativeScript/android/issues/1881)) ([5cb66ee](https://github.com/NativeScript/android/commit/5cb66ee7a5b4c4febdea999d79f9fe2800018fd3))
+
+
+### Features
+
+* Ada 3.3.0 ([#1884](https://github.com/NativeScript/android/issues/1884)) ([45fb275](https://github.com/NativeScript/android/commit/45fb27594f8d80d76acf79648b010151fa8b9ed7))
+* ES modules (ESM) support with conditional esm or commonjs consumption ([#1836](https://github.com/NativeScript/android/issues/1836)) ([052cb21](https://github.com/NativeScript/android/commit/052cb215f475453665c6c7d9e3dba419aa9a606a))
+* http loaded es module realms + HMR DX enrichments ([#1883](https://github.com/NativeScript/android/issues/1883)) ([7782720](https://github.com/NativeScript/android/commit/7782720f50fb5db4f43af8bdca501e90475c96c0))
+* queueMicrotask support ([#1868](https://github.com/NativeScript/android/issues/1868)) ([f033061](https://github.com/NativeScript/android/commit/f03306118ee178365ef16f2789a95b1f43117947))
+
+
+
 # [8.9.0](https://github.com/NativeScript/android/compare/v8.8.6...v8.9.0) (2025-02-26)
 
 
