@@ -24,7 +24,6 @@ thumbs.db
 android-runtime.iml
 test-app/build-tools/*.log
 test-app/analytics/build-statistics.json
-package-lock.json
 
 # V8 prebuilts and the headers that must match them, installed by
 # download_v8.sh from the release pinned in V8_RELEASE.

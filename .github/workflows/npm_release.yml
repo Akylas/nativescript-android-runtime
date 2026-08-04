@@ -247,7 +247,7 @@ jobs:
         with:
           node-version: 22
       - name: Setup
-        run: npm install
+        run: npm ci
       - uses: actions/download-artifact@v8
         with:
           name: npm-package
@@ -260,7 +260,7 @@ jobs:
         working-directory: dist/debug-symbols
         run: zip -r debug-symbols.zip .
       - name: Partial Changelog
-        run: npx conventional-changelog -p angular -r2 > body.md
+        run: npx conventional-changelog -p angular -r 2 > body.md
       - uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           # explicit tag + commit so a manual dispatch (no pushed tag ref) creates
