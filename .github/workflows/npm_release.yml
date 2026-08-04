@@ -2,15 +2,21 @@ name: NPM Release
 on:
   push:
     tags:
-      - "v*"
+      - "v*" # -> release published under the "latest" dist-tag
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to cut, e.g. 9.1.0 (creates tag v<version> and publishes 'latest'). Leave empty for a manual 'next' build."
+        required: false
+        default: ""
 
 env:
   NPM_TAG: "next"
   EMULATOR_NAME: "runtime-emu"
-  NDK_VERSION: r27d
+  NDK_VERSION: r29
   ANDROID_API: 33
   ANDROID_ABI: x86_64
-  NDK_ARCH: darwin
+  NDK_ARCH: linux
 
 permissions:
   contents: read
@@ -18,26 +24,26 @@ permissions:
 jobs:
   build:
     name: Build
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     outputs:
       npm_version: ${{ steps.npm_version_output.outputs.NPM_VERSION }}
       npm_tag: ${{ steps.npm_version_output.outputs.NPM_TAG }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
           egress-policy: audit
 
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           submodules: true
-      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
           cache: 'npm'
-      - uses: actions/setup-java@f2beeb24e141e01a676f977032f5a29d81c9e27e # v5.1.0
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: "temurin"
           java-version: "21"
@@ -81,8 +87,19 @@ jobs:
         run: |
           NPM_VERSION=$(node -e "console.log(require('./package.json').version);")
           echo NPM_VERSION=$NPM_VERSION >> $GITHUB_ENV
+      - name: Set manual release version
+        # manual dispatch with a version: cut tag v<input> and publish ('latest'
+        # unless the version is a prerelease)
+        if: ${{ inputs.version != '' }}
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          NPM_VERSION="${INPUT_VERSION#v}"
+          echo NPM_VERSION=$NPM_VERSION >> $GITHUB_ENV
+          npm version $NPM_VERSION --no-git-tag-version --allow-same-version
       - name: Bump version for dev release
-        if: ${{ !contains(github.ref, 'refs/tags/') }}
+        # branch push (main) or manual run without a version -> "next" prerelease
+        if: ${{ !contains(github.ref, 'refs/tags/') && inputs.version == '' }}
         run: |
           NPM_VERSION=$(node ./scripts/get-next-version.js)
           echo NPM_VERSION=$NPM_VERSION >> $GITHUB_ENV
@@ -93,45 +110,44 @@ jobs:
           NPM_TAG=$(node ./scripts/get-npm-tag.js)
           echo NPM_VERSION=$NPM_VERSION >> $GITHUB_OUTPUT
           echo NPM_TAG=$NPM_TAG >> $GITHUB_OUTPUT
+      - name: Fetch prebuilt V8
+        run: ./download_v8.sh
       - name: Build npm package
         run: ./gradlew -PgitCommitVersion=${{ github.sha }} -PnoCCache --stacktrace
       - name: Upload npm package artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npm-package
           path: dist/akylas-nativescript-android-runtime-${{steps.npm_version_output.outputs.NPM_VERSION}}.tgz
       - name: Upload debug symbols
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: debug-symbols
           path: test-app/runtime/build/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib/*
 
   # test:
   #   name: Test
-  #   runs-on: macos-15-intel
+  #   runs-on: ubuntu-latest
   #   steps:
   #     - name: Harden the runner (Audit all outbound calls)
-  #       uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+  #       uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
   #       with:
   #         egress-policy: audit
 
-  #     - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
   #       with:
   #         submodules: true
-  #     - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+  #     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
   #       with:
   #         node-version: 22
   #         registry-url: "https://registry.npmjs.org"
-  #     - uses: actions/setup-java@f2beeb24e141e01a676f977032f5a29d81c9e27e # v5.1.0
+  #     - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
   #       with:
   #         distribution: "temurin"
   #         java-version: "21"
   #         cache: gradle
   #     - name: Setup Android SDK
   #       uses: android-actions/setup-android@651bceb6f9ca583f16b8d75b62c36ded2ae6fc9c # v4.0.0
-  #     - name: Homebrew dependencies
-  #       run: |
-  #         brew install wget
   #     - name: Setup NDK
   #       run: |
   #         echo "y" | sdkmanager "cmake;3.6.4111459"
@@ -147,10 +163,17 @@ jobs:
   #       run: |
   #         npm install
   #         npm install --prefix ./test-app/tools
+  #     - name: Fetch prebuilt V8
+  #       run: ./download_v8.sh
   #     - name: SBG tests
   #       run: ./gradlew runSbgTests --stacktrace
+  #     - name: Enable KVM
+  #       run: |
+  #         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+  #         sudo udevadm control --reload-rules
+  #         sudo udevadm trigger --name-match=kvm
   #     - name: Run unit tests
-  #       uses: ReactiveCircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+  #       uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
   #       with:
   #         api-level: ${{env.ANDROID_API}}
   #         # this is needed on API 30+
@@ -159,7 +182,7 @@ jobs:
   #         script: ./gradlew runtestsAndVerifyResults --stacktrace
   #     - name: Upload Test Results
   #       if: ${{ !cancelled() }} # run this step even if previous step failed
-  #       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+  #       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
   #       with:
   #         name: android-unit-test-results
   #         path: test-app/dist/android_unit_test_results.xml
@@ -176,11 +199,11 @@ jobs:
       NPM_TAG: ${{needs.build.outputs.npm_tag}}
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
           egress-policy: audit
 
-      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
@@ -216,8 +239,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
   github-release:
     runs-on: ubuntu-latest
-    # only runs on tagged commits
-    if: ${{ contains(github.ref, 'refs/tags/') }}
+    # only runs on tagged commits, or a manual dispatch with a version (which
+    # creates tag v<version> itself via the release action below)
+    if: ${{ contains(github.ref, 'refs/tags/') || inputs.version != '' }}
     permissions:
       contents: write
     needs:
@@ -227,14 +251,14 @@ jobs:
       NPM_VERSION: ${{needs.build.outputs.npm_version}}
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
           egress-policy: audit
 
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Setup
@@ -252,8 +276,15 @@ jobs:
         run: zip -r debug-symbols.zip .
       - name: Partial Changelog
         run: npx conventional-changelog -p angular -r2 > body.md
-      - uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
+      - uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
+          # explicit tag + commit so a manual dispatch (no pushed tag ref) creates
+          # tag v<version> at the dispatched commit; on tag pushes this resolves
+          # to the pushed tag itself
+          tag: "v${{ env.NPM_VERSION }}"
+          name: "v${{ env.NPM_VERSION }}"
+          commit: ${{ github.sha }}
           artifacts: "dist/akylas-nativescript-android-runtime-*.tgz,dist/debug-symbols/debug-symbols.zip"
           bodyFile: "body.md"
           prerelease: ${{needs.build.outputs.npm_tag != 'latest'}}
+          allowUpdates: true

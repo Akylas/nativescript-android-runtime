@@ -14,8 +14,12 @@
 #include "ArrayHelper.h"
 #include "CallbackHandlers.h"
 #include "Constants.h"
+#include "ErrorEvents.h"
+#include "Events.h"
 #include "File.h"
+#include "Interop.h"
 #include "IsolateDisposer.h"
+#include "JType.h"
 #include "JsArgConverter.h"
 #include "JsArgToArrayConverter.h"
 #include "ManualInstrumentation.h"
@@ -137,7 +141,10 @@ Runtime::Runtime(JNIEnv* env, jobject runtime, int id)
   m_runtime = env->NewGlobalRef(runtime);
   m_objectManager = new ObjectManager(m_runtime);
   m_loopTimer = new MessageLoopTimer();
-  s_id2RuntimeCache.emplace(id, this);
+  {
+    std::lock_guard<std::mutex> lock(s_runtimeCacheMutex);
+    s_id2RuntimeCache.emplace(id, this);
+  }
 
   if (GET_USED_MEMORY_METHOD_ID == nullptr) {
     auto RUNTIME_CLASS = env->FindClass("com/tns/Runtime");
@@ -150,9 +157,12 @@ Runtime::Runtime(JNIEnv* env, jobject runtime, int id)
 }
 
 Runtime* Runtime::GetRuntime(int runtimeId) {
-  auto itFound = s_id2RuntimeCache.find(runtimeId);
-  auto runtime =
-      (itFound != s_id2RuntimeCache.end()) ? itFound->second : nullptr;
+  Runtime* runtime = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(s_runtimeCacheMutex);
+    auto itFound = s_id2RuntimeCache.find(runtimeId);
+    runtime = (itFound != s_id2RuntimeCache.end()) ? itFound->second : nullptr;
+  }
 
   if (runtime == nullptr) {
     stringstream ss;
@@ -164,15 +174,31 @@ Runtime* Runtime::GetRuntime(int runtimeId) {
 }
 
 Runtime* Runtime::GetRuntime(v8::Isolate* isolate) {
-  auto it = s_isolate2RuntimesCache.find(isolate);
+  /*
+   * Hot path, called from V8 callbacks on the isolate's own thread. The slot
+   * is written once in PrepareV8Runtime before the isolate runs any JS, so
+   * reading it requires no lock.
+   */
+  auto runtime = static_cast<Runtime*>(
+      isolate->GetData((uint32_t)Runtime::IsolateData::RUNTIME));
+  if (runtime != nullptr) {
+    return runtime;
+  }
 
-  if (it == s_isolate2RuntimesCache.end()) {
+  // covers the window during isolate setup before SetData has run
+  {
+    std::lock_guard<std::mutex> lock(s_runtimeCacheMutex);
+    auto it = s_isolate2RuntimesCache.find(isolate);
+    runtime = (it != s_isolate2RuntimesCache.end()) ? it->second : nullptr;
+  }
+
+  if (runtime == nullptr) {
     stringstream ss;
     ss << "Cannot find runtime for isolate: " << isolate;
     throw NativeScriptException(ss.str());
   }
 
-  return it->second;
+  return runtime;
 }
 
 Runtime* Runtime::GetRuntimeFromIsolateData(v8::Isolate* isolate) {
@@ -233,6 +259,29 @@ void Runtime::Init(JNIEnv* env, jstring filesPath, jstring nativeLibDir,
   JniLocalRef cacheCode(env->GetObjectArrayElement(args, 1));
   Constants::V8_CACHE_COMPILED_CODE = (bool)cacheCode;
   JniLocalRef profilerOutputDir(env->GetObjectArrayElement(args, 2));
+
+  {
+    JEnv jEnv(env);
+    JniLocalRef discardUncaught(env->GetObjectArrayElement(
+        args, (jsize)11 /* KnownKeys.DiscardUncaughtJsExceptions */));
+    if (!discardUncaught.IsNull()) {
+      m_discardUncaughtJsExceptions =
+          JType::BooleanValue(jEnv, discardUncaught) == JNI_TRUE;
+    }
+
+    JniLocalRef uncaughtErrorPolicy(env->GetObjectArrayElement(
+        args, (jsize)15 /* KnownKeys.UncaughtErrorPolicy */));
+    if (!uncaughtErrorPolicy.IsNull()) {
+      auto policy = ArgConverter::jstringToString(uncaughtErrorPolicy);
+      if (policy == "throw") {
+        m_uncaughtErrorPolicy = UncaughtErrorPolicy::Throw;
+      } else {
+        // AppConfig validates and warns about unknown values; anything that
+        // is not "throw" behaves as the default.
+        m_uncaughtErrorPolicy = UncaughtErrorPolicy::Report;
+      }
+    }
+  }
 
   DEBUG_WRITE("Initializing Telerik NativeScript");
 
@@ -296,9 +345,7 @@ void Runtime::RunModule(const char* moduleName) {
   m_module.Load(context, moduleName);
 }
 
-void Runtime::RunWorker(jstring scriptFile) {
-  // TODO: Pete: Why do I crash here with a JNI error (accessing bad jni)
-  string filePath = ArgConverter::jstringToString(scriptFile);
+void Runtime::RunWorker(const std::string& filePath) {
   auto context = this->GetContext();
   m_module.LoadWorker(context, filePath);
 }
@@ -318,8 +365,7 @@ jobject Runtime::RunScript(JNIEnv* _env, jobject obj, jstring scriptFile) {
   TryCatch tc(isolate);
 
   Local<Script> script;
-  ScriptOrigin origin(isolate,
-                      ArgConverter::ConvertToV8String(isolate, filename));
+  ScriptOrigin origin(ArgConverter::ConvertToV8String(isolate, filename));
   auto maybeScript = Script::Compile(context, source, &origin).ToLocal(&script);
 
   if (tc.HasCaught()) {
@@ -475,11 +521,11 @@ bool Runtime::TryCallGC() {
   return success;
 }
 
-void Runtime::PassExceptionToJsNative(JNIEnv* env, jobject obj,
-                                      jthrowable exception, jstring message,
-                                      jstring fullStackTrace,
-                                      jstring jsStackTrace,
-                                      jboolean isDiscarded) {
+jboolean Runtime::PassExceptionToJsNative(JNIEnv* env, jobject obj,
+                                          jthrowable exception, jstring message,
+                                          jstring fullStackTrace,
+                                          jstring jsStackTrace,
+                                          jboolean isDiscarded) {
   auto isolate = m_isolate;
 
   string errMsg = ArgConverter::jstringToString(message);
@@ -514,33 +560,36 @@ void Runtime::PassExceptionToJsNative(JNIEnv* env, jobject obj,
                 ArgConverter::jstringToV8String(isolate, jsStackTrace));
   }
 
+  // Give WHATWG listeners a chance first; preventDefault() fully handles the
+  // report - no __on*Error shim, and the Java caller is told the exception
+  // was handled. The discard path (a containment variant - the app is alive)
+  // dispatches the `error` event; the uncaught path is the post-mortem
+  // native-layer death notification and dispatches `nativeuncaughterror`,
+  // preserving the invariant that `error` only fires while the failure is
+  // still containable.
+  string stackTraceStr = ArgConverter::jstringToString(fullStackTrace);
+  bool prevented;
+  if (isDiscarded == JNI_TRUE) {
+    prevented = ErrorEvents::DispatchError(isolate, errObj, errMsg, stackTraceStr);
+  } else {
+    prevented = ErrorEvents::DispatchNativeUncaughtError(isolate, errObj, errMsg,
+                                                         stackTraceStr);
+  }
+  if (prevented) {
+    return JNI_TRUE;
+  }
+
   // pass err to JS
   NativeScriptException::CallJsFuncWithErr(errObj, isDiscarded);
-}
-
-void Runtime::PassUncaughtExceptionFromWorkerToMainHandler(
-    Local<v8::String> message, Local<v8::String> stackTrace,
-    Local<v8::String> filename, int lineno) {
-  JEnv env;
-  auto runtimeClass = env.GetObjectClass(m_runtime);
-
-  auto mId = env.GetStaticMethodID(
-      runtimeClass, "passUncaughtExceptionFromWorkerToMain",
-      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V");
-
-  auto jMsg = ArgConverter::ConvertToJavaString(message);
-  auto jfileName = ArgConverter::ConvertToJavaString(filename);
-  auto stckTrace = ArgConverter::ConvertToJavaString(stackTrace);
-
-  JniLocalRef jMsgLocal(jMsg);
-  JniLocalRef jfileNameLocal(jfileName);
-  JniLocalRef stTrace(stckTrace);
-
-  env.CallStaticVoidMethod(runtimeClass, mId, (jstring)jMsgLocal,
-                           (jstring)jfileNameLocal, (jstring)stTrace, lineno);
+  return JNI_FALSE;
 }
 
 static void InitializeV8() {
+  // V8::Initialize() freezes the flag list, and changing a flag afterwards
+  // aborts the process, so the app's flags have to be applied here rather than
+  // per isolate. Runtime::Init has already read them out of the Java config.
+  V8::SetFlagsFromString(Constants::V8_STARTUP_FLAGS.c_str(),
+                         Constants::V8_STARTUP_FLAGS.size());
   Runtime::platform = v8::platform::NewDefaultPlatform().release();
   V8::InitializePlatform(Runtime::platform);
   V8::Initialize();
@@ -576,7 +625,10 @@ Isolate* Runtime::PrepareV8Runtime(const string& filesPath,
   m_realtimeOrigin = platform->CurrentClockTimeMillis();
   isolateFrame.log("Isolate.New");
 
-  s_isolate2RuntimesCache[isolate] = this;
+  {
+    std::lock_guard<std::mutex> lock(s_runtimeCacheMutex);
+    s_isolate2RuntimesCache[isolate] = this;
+  }
   v8::Locker locker(isolate);
   Isolate::Scope isolate_scope(isolate);
   HandleScope handleScope(isolate);
@@ -588,8 +640,6 @@ Isolate* Runtime::PrepareV8Runtime(const string& filesPath,
   isolate->SetData((uint32_t)Runtime::IsolateData::RUNTIME, this);
   isolate->SetData((uint32_t)Runtime::IsolateData::CONSTANTS, consts);
 
-  V8::SetFlagsFromString(Constants::V8_STARTUP_FLAGS.c_str(),
-                         Constants::V8_STARTUP_FLAGS.size());
   isolate->SetCaptureStackTraceForUncaughtExceptions(true, 100,
                                                      StackTrace::kOverview);
 
@@ -602,6 +652,7 @@ Isolate* Runtime::PrepareV8Runtime(const string& filesPath,
       ImportModuleDynamicallyCallback);
 
   isolate->AddMessageListener(NativeScriptException::OnUncaughtError);
+  isolate->SetPromiseRejectCallback(NativeScriptException::OnPromiseRejected);
 
   __android_log_print(ANDROID_LOG_DEBUG, "TNS.Runtime", "V8 version %s",
                       V8::GetVersion());
@@ -698,11 +749,6 @@ Isolate* Runtime::PrepareV8Runtime(const string& filesPath,
   globalTemplate->Set(ArgConverter::ConvertToV8String(isolate, "URLPattern"),
                       URLPatternImpl::GetCtor(isolate));
 
-  /*
-   * Attach `Worker` object constructor only to the main thread (isolate)'s
-   * global object Workers should not be created from within other Workers, for
-   * now
-   */
   if (!s_mainThreadInitialized) {
     m_isMainThread = true;
     pipe2(m_mainLooper_fd, O_NONBLOCK | O_CLOEXEC);
@@ -726,7 +772,32 @@ Isolate* Runtime::PrepareV8Runtime(const string& filesPath,
     ALooper_addFd(m_mainLooper, m_mainLooper_fd[0], ALOOPER_POLL_CALLBACK,
                   ALOOPER_EVENT_INPUT,
                   CallbackHandlers::RunOnMainThreadFdCallback, nullptr);
+  }
+  /*
+   * Emulate a `WorkerGlobalScope`
+   * Attach 'postMessage', 'close' to the global object
+   */
+  else {
+    m_isMainThread = false;
+    auto postMessageFuncTemplate = FunctionTemplate::New(
+        isolate, CallbackHandlers::WorkerGlobalPostMessageCallback);
+    globalTemplate->Set(
+        ArgConverter::ConvertToV8String(isolate, "__ns__worker"),
+        Boolean::New(isolate, true));
+    globalTemplate->Set(ArgConverter::ConvertToV8String(isolate, "postMessage"),
+                        postMessageFuncTemplate);
+    auto closeFuncTemplate = FunctionTemplate::New(
+        isolate, CallbackHandlers::WorkerGlobalCloseCallback);
+    globalTemplate->Set(ArgConverter::ConvertToV8String(isolate, "close"),
+                        closeFuncTemplate);
+  }
 
+  /*
+   * Attach the `Worker` constructor to every isolate's global object - workers
+   * may be created from the main thread or from within other workers
+   * (mirroring the iOS runtime).
+   */
+  {
     Local<FunctionTemplate> workerFuncTemplate =
         FunctionTemplate::New(isolate, CallbackHandlers::NewThreadCallback);
     Local<ObjectTemplate> prototype = workerFuncTemplate->PrototypeTemplate();
@@ -748,24 +819,19 @@ Isolate* Runtime::PrepareV8Runtime(const string& filesPath,
     globalTemplate->Set(ArgConverter::ConvertToV8String(isolate, "Worker"),
                         workerFuncTemplate);
   }
+
   /*
-   * Emulate a `WorkerGlobalScope`
-   * Attach 'postMessage', 'close' to the global object
+   * Per-runtime task queue used by child workers to deliver messages, errors
+   * and cleanup notifications to this runtime's thread. The looper exists for
+   * every runtime: Java prepares it before initNativeScript on both the main
+   * and worker threads.
    */
-  else {
-    m_isMainThread = false;
-    auto postMessageFuncTemplate = FunctionTemplate::New(
-        isolate, CallbackHandlers::WorkerGlobalPostMessageCallback);
-    globalTemplate->Set(
-        ArgConverter::ConvertToV8String(isolate, "__ns__worker"),
-        Boolean::New(isolate, true));
-    globalTemplate->Set(ArgConverter::ConvertToV8String(isolate, "postMessage"),
-                        postMessageFuncTemplate);
-    auto closeFuncTemplate = FunctionTemplate::New(
-        isolate, CallbackHandlers::WorkerGlobalCloseCallback);
-    globalTemplate->Set(ArgConverter::ConvertToV8String(isolate, "close"),
-                        closeFuncTemplate);
-  }
+  m_looperTasks = std::make_shared<LooperTasks>();
+  m_looperTasks->Initialize(ALooper_forThread());
+
+  // Unhandled-promise-rejection tracker; fed by the SetPromiseRejectCallback
+  // above and drained via a LooperTasks task once per looper turn.
+  m_promiseRejections = std::make_unique<PromiseRejectionTracker>(this);
 
   SimpleProfiler::Init(isolate, globalTemplate);
 
@@ -846,6 +912,17 @@ Isolate* Runtime::PrepareV8Runtime(const string& filesPath,
 
   v8::Local<v8::Value> out;
   script->Run(context).ToLocal(&out);
+
+  // Generic WHATWG event primitives (Event/EventTarget + the globalThis
+  // mixin), then the error-events layer on top (ErrorEvent/
+  // PromiseRejectionEvent, reportError and the native dispatch closures) -
+  // installed for both the main and worker isolates.
+  Events::Init(context);
+  ErrorEvents::Init(context);
+
+  // The `interop` global (interop.escapeException), mirroring iOS.
+  Interop::Init(context);
+
   m_objectManager->Init(isolate);
 
   m_module.Init(isolate, callingDir);
@@ -951,8 +1028,25 @@ void Runtime::PerformanceNowCallback(
 }
 
 void Runtime::DestroyRuntime() {
-  s_id2RuntimeCache.erase(m_id);
-  s_isolate2RuntimesCache.erase(m_isolate);
+  {
+    std::lock_guard<std::mutex> lock(s_runtimeCacheMutex);
+    s_id2RuntimeCache.erase(m_id);
+    s_isolate2RuntimesCache.erase(m_isolate);
+  }
+  if (m_looperTasks != nullptr) {
+    // runs on this runtime's own thread; children still holding a weak_ptr
+    // will have their posts dropped from now on
+    m_looperTasks->Terminate();
+  }
+  // The events state holds v8::Global handles (backing event target, dispatch
+  // closures and tracked promise rejections) - reset them while the isolate
+  // is still alive.
+  m_promiseRejections.reset();
+  m_globalEventTarget.Reset();
+  m_dispatchErrorEventFunc.Reset();
+  m_dispatchUnhandledRejectionFunc.Reset();
+  m_dispatchRejectionHandledFunc.Reset();
+  m_dispatchNativeUncaughtErrorFunc.Reset();
   tns::disposeIsolate(m_isolate);
 }
 
@@ -970,6 +1064,7 @@ JavaVM* Runtime::s_jvm = nullptr;
 jmethodID Runtime::GET_USED_MEMORY_METHOD_ID = nullptr;
 robin_hood::unordered_map<int, Runtime*> Runtime::s_id2RuntimeCache;
 robin_hood::unordered_map<Isolate*, Runtime*> Runtime::s_isolate2RuntimesCache;
+std::mutex Runtime::s_runtimeCacheMutex;
 bool Runtime::s_mainThreadInitialized = false;
 v8::Platform* Runtime::platform = nullptr;
 int Runtime::m_androidVersion = Runtime::GetAndroidVersion();

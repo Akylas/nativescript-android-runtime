@@ -31,4 +31,51 @@ describe("ES Modules", () => {
     expect(workerResults.urlObjectSupported).toBe(true);
     expect(workerResults.tildePathSupported).toBe(true);
   });
+
+  // These use the done-callback form: this Jasmine version only awaits a spec
+  // when its function declares an argument (an async function returning a
+  // promise is run synchronously and its result ignored).
+  it("resolves a relative dynamic import from a subdirectory module", (done) => {
+    import("~/esm-subdir/parent.mjs")
+      .then((parent) => parent.loadSibling())
+      .then(
+        (value) => { expect(value).toBe("sibling-loaded"); done(); },
+        (err) => { expect(err).toBeUndefined(); done(); }
+      );
+  });
+
+  it("resolves a '../' relative dynamic import from a nested module", (done) => {
+    import("~/esm-subdir/nested/child.mjs")
+      .then((child) => child.loadParentSibling())
+      .then(
+        (value) => { expect(value).toBe("sibling-loaded"); done(); },
+        (err) => { expect(err).toBeUndefined(); done(); }
+      );
+  });
+
+  it("still resolves a relative dynamic import from an app-root module", (done) => {
+    import("~/testRelativeDynamicImport.mjs")
+      .then((root) => root.loadRootSibling())
+      .then(
+        (value) => { expect(value).toBe("ES Module"); done(); },
+        (err) => { expect(err).toBeUndefined(); done(); }
+      );
+  });
+
+  it("resolves './x' and '../x' to a single shared module instance", (done) => {
+    Promise.all([
+      import("~/esm-dedup/viaSameDir.mjs"),
+      import("~/esm-dedup/nested/viaParentDir.mjs"),
+    ]).then(
+      ([sameDir, parentDir]) => {
+        // The same counter.mjs is reached as "./counter.mjs" and as
+        // "../counter.mjs"; it must be one module instance sharing one state
+        // object, incremented once per importer.
+        expect(sameDir.seenState).toBe(parentDir.seenState);
+        expect(sameDir.seenState.count).toBe(2);
+        done();
+      },
+      (err) => { expect(err).toBeUndefined(); done(); }
+    );
+  });
 });

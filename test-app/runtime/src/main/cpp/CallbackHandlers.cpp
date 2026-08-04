@@ -17,6 +17,8 @@
 #include "MethodCache.h"
 #include "SimpleProfiler.h"
 #include "Runtime.h"
+#include "WorkerMessage.h"
+#include "WorkerWrapper.h"
 #include <unistd.h>
 #include <dlfcn.h>
 
@@ -56,15 +58,28 @@ void CallbackHandlers::Init(Isolate *isolate) {
                                                         "()V");
     assert(ENABLE_VERBOSE_LOGGING_METHOD_ID != nullptr);
 
-    INIT_WORKER_METHOD_ID = env.GetStaticMethodID(RUNTIME_CLASS, "initWorker",
-                                                  "(Ljava/lang/String;Ljava/lang/String;I)V");
-
-    assert(INIT_WORKER_METHOD_ID != nullptr);
-
     MetadataNode::Init(isolate);
 
     MethodCache::Init();
 }
+
+/*
+ * Marks a JS -> Java call in flight on the runtime (see
+ * Runtime::JavaCallDepth): a JS callback that throws while the depth is
+ * non-zero is part of a JS-initiated chain and must propagate back to the
+ * outer JS catch instead of being contained at the boundary.
+ */
+namespace {
+struct JavaCallScope {
+    explicit JavaCallScope(Runtime* runtime) : runtime_(runtime) {
+        runtime_->EnterJavaCall();
+    }
+    ~JavaCallScope() {
+        runtime_->LeaveJavaCall();
+    }
+    Runtime* runtime_;
+};
+}  // namespace
 
 bool CallbackHandlers::RegisterInstance(Isolate *isolate, const Local<Object> &jsObject,
                                         const std::string &fullClassName,
@@ -78,6 +93,10 @@ bool CallbackHandlers::RegisterInstance(Isolate *isolate, const Local<Object> &j
 
     auto runtime = Runtime::GetRuntime(isolate);
     auto objectManager = runtime->GetObjectManager();
+
+    // The Java constructor may synchronously call back into JS (extended
+    // class init) - that whole window is a JS-initiated chain.
+    JavaCallScope javaCallScope(runtime);
 
     JEnv env;
 
@@ -213,6 +232,10 @@ void CallbackHandlers::CallJavaMethod(const Local<Object> &caller, const string 
     MethodCache::CacheMethodInfo mi;
 
     auto isolate = args.GetIsolate();
+
+    // The Java method may synchronously call back into JS (an overridden
+    // method on the receiver) - that whole window is a JS-initiated chain.
+    JavaCallScope javaCallScope(Runtime::GetRuntime(isolate));
 
     if ((entry != nullptr) && entry->getIsResolved()) {
         auto &entrySignature = entry->getSig();
@@ -570,8 +593,8 @@ CallbackHandlers::GetImplementedInterfaces(JEnv &env, const Local<Object> &imple
     }
 
     vector<jstring> interfacesToImplement;
-    auto isolate = implementationObject->GetIsolate();
-    auto context = implementationObject->CreationContext();
+    auto isolate = v8::Isolate::GetCurrent();
+    auto context = implementationObject->GetCreationContext(isolate).ToLocalChecked();
     Local<String> interfacesName = String::NewFromUtf8Literal(isolate, "interfaces");
     Local<Value> prop;
     if (implementationObject->Get(context, interfacesName).ToLocal(&prop) && !prop.IsEmpty() && prop->IsArray()) {
@@ -616,8 +639,8 @@ CallbackHandlers::GetMethodOverrides(JEnv &env, const Local<Object> &implementat
     }
 
     vector<jstring> methodNames;
-    auto isolate = implementationObject->GetIsolate();
-    auto context = implementationObject->CreationContext();
+    auto isolate = v8::Isolate::GetCurrent();
+    auto context = implementationObject->GetCreationContext(isolate).ToLocalChecked();
     auto propNames = implementationObject->GetOwnPropertyNames(context).ToLocalChecked();
     for (int i = 0; i < propNames->Length(); i++) {
         auto name = propNames->Get(context, i).ToLocalChecked().As<String>();
@@ -697,7 +720,8 @@ int CallbackHandlers::RunOnMainThreadFdCallback(int fd, int events, void *data) 
 
     cb->Call(context, context->Global(), 0, nullptr);  // ignore JS return value
 
-    if(tc.HasCaught()){
+    if (tc.HasCaught() &&
+        !NativeScriptException::ContainUncaughtCallbackException(isolate, tc)) {
         throw NativeScriptException(tc);
     }
 
@@ -934,9 +958,15 @@ Local<Value> CallbackHandlers::CallJSMethod(Isolate *isolate, JNIEnv *_env,
         //TODO: if javaResult is a pure js object create a java object that represents this object in java land
 
         if (tc.HasCaught()) {
-            stringstream ss;
-            ss << "Calling js method " << methodName << " failed";
-            throw NativeScriptException(tc, ss.str());
+            if (NativeScriptException::ContainUncaughtCallbackException(isolate, tc)) {
+                // Reported per uncaughtErrorPolicy; the native caller resumes
+                // with a default value.
+                jsResult = v8::Undefined(isolate);
+            } else {
+                stringstream ss;
+                ss << "Calling js method " << methodName << " failed";
+                throw NativeScriptException(tc, ss.str());
+            }
         }
 
         result = handleScope.Escape(jsResult);
@@ -989,6 +1019,72 @@ jobjectArray CallbackHandlers::GetJavaStringArray(JEnv &env, int length) {
     return (jobjectArray) env.NewGlobalRef(tmpArr);
 }
 
+/*
+ * Resolves the `androidPriority` Worker option to an android.os.Process
+ * thread priority (nice value). Accepts the THREAD_PRIORITY_* names in
+ * camelCase or a raw nice value clamped to [-20, 19].
+ * Defaults to THREAD_PRIORITY_BACKGROUND (10), the previously hardcoded value.
+ */
+static int GetWorkerThreadPriority(Isolate *isolate, Local<Context> context,
+                                   const v8::FunctionCallbackInfo<v8::Value> &args) {
+    const int defaultPriority = 10; // android.os.Process.THREAD_PRIORITY_BACKGROUND
+
+    if (args.Length() < 2 || !args[1]->IsObject()) {
+        return defaultPriority;
+    }
+
+    auto options = args[1].As<Object>();
+    Local<Value> value;
+    if (!options->Get(context, ArgConverter::ConvertToV8String(isolate, "androidPriority"))
+                 .ToLocal(&value) ||
+        value->IsNullOrUndefined()) {
+        return defaultPriority;
+    }
+
+    if (value->IsNumber()) {
+        int priority = value->Int32Value(context).FromMaybe(defaultPriority);
+        if (priority < -20) {
+            priority = -20;
+        } else if (priority > 19) {
+            priority = 19;
+        }
+        return priority;
+    }
+
+    if (value->IsString()) {
+        auto name = ArgConverter::ConvertToString(value.As<String>());
+        if (name == "lowest") {
+            return 19;
+        } else if (name == "background") {
+            return 10;
+        } else if (name == "lessFavorable") {
+            return 1;
+        } else if (name == "default") {
+            return 0;
+        } else if (name == "moreFavorable") {
+            return -1;
+        } else if (name == "foreground") {
+            return -2;
+        } else if (name == "display") {
+            return -4;
+        } else if (name == "urgentDisplay") {
+            return -8;
+        } else if (name == "video") {
+            return -10;
+        } else if (name == "audio") {
+            return -16;
+        } else if (name == "urgentAudio") {
+            return -19;
+        }
+    }
+
+    throw NativeScriptException(
+            "Invalid value for the Worker 'androidPriority' option. Expected one of: "
+            "'lowest', 'background', 'lessFavorable', 'default', 'moreFavorable', "
+            "'foreground', 'display', 'urgentDisplay', 'video', 'audio', 'urgentAudio' "
+            "or a number between -20 and 19.");
+}
+
 void CallbackHandlers::NewThreadCallback(const v8::FunctionCallbackInfo<v8::Value> &args) {
     try {
         if (!args.IsConstructCall()) {
@@ -1004,7 +1100,7 @@ void CallbackHandlers::NewThreadCallback(const v8::FunctionCallbackInfo<v8::Valu
         }
 
         auto thiz = args.This();
-        auto isolate = thiz->GetIsolate();
+        auto isolate = v8::Isolate::GetCurrent();
         auto context = isolate->GetCurrentContext();
 
         std::string workerPath;
@@ -1043,8 +1139,8 @@ void CallbackHandlers::NewThreadCallback(const v8::FunctionCallbackInfo<v8::Valu
             throw NativeScriptException("Worker constructor expects a string URL or URL object.");
         }
 
-        // TODO: Handle options parameter (args[1]) if provided
-        // For now, we ignore the options parameter to maintain compatibility
+        int priority = GetWorkerThreadPriority(isolate, context, args);
+
         // TODO: Validate worker path and call worker.onerror if the script does not exist
 
         // Resolve tilde paths before creating the worker
@@ -1055,38 +1151,57 @@ void CallbackHandlers::NewThreadCallback(const v8::FunctionCallbackInfo<v8::Valu
             resolvedPath = Constants::APP_ROOT_FOLDER_PATH + tail;
         }
 
-        auto currentExecutingScriptName = StackTrace::CurrentStackTrace(isolate, 1,
-                                                                        StackTrace::kScriptName)->GetFrame(
-                isolate, 0)->GetScriptName();
-        auto currentExecutingScriptNameStr = ArgConverter::ConvertToString(
-                currentExecutingScriptName.As<String>());
-        auto lastForwardSlash = currentExecutingScriptNameStr.find_last_of("/");
-        auto currentDir = currentExecutingScriptNameStr.substr(0, lastForwardSlash + 1);
-        string fileSchema("file://");
-        if (currentDir.compare(0, fileSchema.length(), fileSchema) == 0) {
-            currentDir = currentDir.substr(fileSchema.length());
+        /*
+         * Relative worker paths are resolved against the calling module's
+         * directory. The caller may have no script name (e.g. eval'd code) or
+         * the script may not be found there - in both cases fall back to
+         * app-root-relative resolution, mirroring the iOS runtime.
+         */
+        std::string currentDir = Constants::APP_ROOT_FOLDER_PATH;
+        auto stack = StackTrace::CurrentStackTrace(isolate, 1, StackTrace::kScriptName);
+        if (!stack.IsEmpty() && stack->GetFrameCount() > 0) {
+            auto currentExecutingScriptName = stack->GetFrame(isolate, 0)->GetScriptName();
+            auto currentExecutingScriptNameStr = ArgConverter::ConvertToString(
+                    currentExecutingScriptName);
+            auto lastForwardSlash = currentExecutingScriptNameStr.find_last_of("/");
+            if (lastForwardSlash != std::string::npos) {
+                auto callerDir = currentExecutingScriptNameStr.substr(0, lastForwardSlash + 1);
+                string fileSchema("file://");
+                if (callerDir.compare(0, fileSchema.length(), fileSchema) == 0) {
+                    callerDir = callerDir.substr(fileSchema.length());
+                }
+                currentDir = callerDir;
+            }
         }
 
-        // Will throw if path is invalid or doesn't exist
-        ModuleInternal::CheckFileExists(isolate, resolvedPath, currentDir);
+        // Will throw if the path is invalid or the file doesn't exist
+        try {
+            ModuleInternal::CheckFileExists(isolate, resolvedPath, currentDir);
+        } catch (NativeScriptException& e) {
+            if (currentDir == Constants::APP_ROOT_FOLDER_PATH) {
+                throw;
+            }
+            // not found next to the caller - retry against the app root
+            ModuleInternal::CheckFileExists(isolate, resolvedPath,
+                                            Constants::APP_ROOT_FOLDER_PATH);
+            currentDir = Constants::APP_ROOT_FOLDER_PATH;
+        }
 
-        auto workerId = nextWorkerId++;
+        auto workerId = WorkerWrapper::NextWorkerId();
         V8SetPrivateValue(isolate, thiz, ArgConverter::ConvertToV8String(isolate, "workerId"),
                           Number::New(isolate, workerId));
 
-        auto persistentWorker = new Persistent<Object>(isolate, thiz);
+        // Resolve the jclass/jmethodID handles the worker thread will need,
+        // here on the main thread where class loading is safe.
+        WorkerWrapper::EnsureJniCached();
 
-        id2WorkerMap.emplace(workerId, persistentWorker);
+        auto wrapper = std::make_shared<WorkerWrapper>(isolate, workerId, resolvedPath,
+                                                       currentDir, priority, thiz);
+        WorkerWrapper::Insert(workerId, wrapper);
 
         DEBUG_WRITE("Called Worker constructor id=%d", workerId);
 
-        JEnv env;
-        Local<String> filePathStr = ArgConverter::ConvertToV8String(isolate, resolvedPath);
-        JniLocalRef filePath(ArgConverter::ConvertToJavaString(filePathStr));
-        JniLocalRef dirPath(env.NewStringUTF(currentDir.c_str()));
-
-        env.CallStaticVoidMethod(RUNTIME_CLASS, INIT_WORKER_METHOD_ID, (jstring) filePath,
-                                 (jstring) dirPath, workerId);
+        wrapper->Start();
     } catch (NativeScriptException &e) {
         e.ReThrowToV8();
     } catch (std::exception e) {
@@ -1122,73 +1237,29 @@ CallbackHandlers::WorkerObjectPostMessageCallback(const v8::FunctionCallbackInfo
                                            jsId);
 
         auto context = isolate->GetCurrentContext();
-        auto objToStringify = args[0]->ToObject(context).ToLocalChecked();
-        std::string msg = tns::JsonStringifyObject(isolate, objToStringify, false);
 
-        // get worker's ID that is associated on the other side - in Java
+        // get worker's ID that is associated with the WorkerWrapper
         auto id = jsId->Int32Value(context).ToChecked();
 
-        JEnv env;
-        auto mId = env.GetStaticMethodID(RUNTIME_CLASS, "sendMessageFromMainToWorker",
-                                         "(ILjava/lang/String;)V");
+        auto wrapper = WorkerWrapper::GetById(id);
+        if (wrapper == nullptr || wrapper->IsTerminating() || wrapper->IsClosing()) {
+            DEBUG_WRITE(
+                    "MAIN: WorkerObjectPostMessageCallback - worker(id=%d) is terminated or closing. No message will be sent.",
+                    id);
+            return;
+        }
 
-        jstring jmsg = env.NewStringUTF(msg.c_str());
-        JniLocalRef jmsgRef(jmsg);
+        auto message = std::make_shared<worker::Message>();
+        if (message->Serialize(isolate, context, args[0]).IsNothing()) {
+            // a DataCloneError is already pending on the isolate
+            return;
+        }
 
-        env.CallStaticVoidMethod(RUNTIME_CLASS, mId, id, (jstring) jmsgRef);
+        wrapper->PostMessage(message);
 
         DEBUG_WRITE(
                 "MAIN: WorkerObjectPostMessageCallback called postMessage on Worker object(id=%d)",
                 id);
-    } catch (NativeScriptException &ex) {
-        ex.ReThrowToV8();
-    } catch (std::exception e) {
-        stringstream ss;
-        ss << "Error: c++ exception: " << e.what() << endl;
-        NativeScriptException nsEx(ss.str());
-        nsEx.ReThrowToV8();
-    } catch (...) {
-        NativeScriptException nsEx(std::string("Error: c++ exception!"));
-        nsEx.ReThrowToV8();
-    }
-}
-
-void CallbackHandlers::WorkerGlobalOnMessageCallback(Isolate *isolate, jstring message) {
-    auto context = isolate->GetCurrentContext();
-
-    try {
-        auto globalObject = context->Global();
-
-        TryCatch tc(isolate);
-
-        auto callback = globalObject->Get(context, ArgConverter::ConvertToV8String(isolate,
-                                                                                   "onmessage")).ToLocalChecked();
-        auto isEmpty = callback.IsEmpty();
-        auto isFunction = callback->IsFunction();
-
-        if (!isEmpty && isFunction) {
-            auto msgString = ArgConverter::jstringToV8String(isolate, message).As<String>();
-            Local<Value> msg;
-            JSON::Parse(context, msgString).ToLocal(&msg);
-
-            auto obj = Object::New(isolate);
-            obj->DefineOwnProperty(isolate->GetCurrentContext(),
-                                   ArgConverter::ConvertToV8String(isolate, "data"), msg,
-                                   PropertyAttribute::ReadOnly);
-            Local<Value> args1[] = {obj};
-
-            auto func = callback.As<Function>();
-
-            func->Call(context, Undefined(isolate), 1, args1);
-        } else {
-            DEBUG_WRITE(
-                    "WORKER: WorkerGlobalOnMessageCallback couldn't fire a worker's `onmessage` callback because it isn't implemented!");
-        }
-
-        if (tc.HasCaught()) {
-            // TODO: Pete: Will catch exceptions thrown artificially in postMessage callbacks inside of 'onmessage' implementation
-            CallWorkerScopeOnErrorHandle(isolate, tc);
-        }
     } catch (NativeScriptException &ex) {
         ex.ReThrowToV8();
     } catch (std::exception e) {
@@ -1222,83 +1293,23 @@ CallbackHandlers::WorkerGlobalPostMessageCallback(const v8::FunctionCallbackInfo
             return;
         }
 
+        auto wrapper = WorkerWrapper::FromIsolate(isolate);
+        if (wrapper == nullptr || wrapper->IsTerminating()) {
+            DEBUG_WRITE(
+                    "WORKER: WorkerGlobalPostMessageCallback - worker is terminating. No message will be sent.");
+            return;
+        }
+
         auto context = isolate->GetCurrentContext();
-        auto objToStringify = args[0]->ToObject(context).ToLocalChecked();
-        std::string msg = tns::JsonStringifyObject(isolate, objToStringify, false);
+        auto message = std::make_shared<worker::Message>();
+        if (message->Serialize(isolate, context, args[0]).IsNothing()) {
+            // a DataCloneError is already pending on the isolate
+            return;
+        }
 
-        JEnv env;
-        auto mId = env.GetStaticMethodID(RUNTIME_CLASS, "sendMessageFromWorkerToMain",
-                                         "(Ljava/lang/String;)V");
-
-        auto jmsg = env.NewStringUTF(msg.c_str());
-        JniLocalRef jmsgRef(jmsg);
-
-        env.CallStaticVoidMethod(RUNTIME_CLASS, mId, (jstring) jmsgRef);
+        wrapper->PostMessageToParent(message);
 
         DEBUG_WRITE("WORKER: WorkerGlobalPostMessageCallback called.");
-    } catch (NativeScriptException &ex) {
-        ex.ReThrowToV8();
-    } catch (std::exception e) {
-        stringstream ss;
-        ss << "Error: c++ exception: " << e.what() << endl;
-        NativeScriptException nsEx(ss.str());
-        nsEx.ReThrowToV8();
-    } catch (...) {
-        NativeScriptException nsEx(std::string("Error: c++ exception!"));
-        nsEx.ReThrowToV8();
-    }
-}
-
-void
-CallbackHandlers::WorkerObjectOnMessageCallback(Isolate *isolate, jint workerId, jstring message) {
-    try {
-        auto workerFound = CallbackHandlers::id2WorkerMap.find(workerId);
-
-        if (workerFound == CallbackHandlers::id2WorkerMap.end()) {
-            // TODO: Pete: Throw exception
-            DEBUG_WRITE(
-                    "MAIN: WorkerObjectOnMessageCallback no worker instance was found with workerId=%d.",
-                    workerId);
-            return;
-        }
-
-        auto workerPersistent = workerFound->second;
-
-        if (workerPersistent->IsEmpty()) {// Object has been collected
-            DEBUG_WRITE(
-                    "MAIN: WorkerObjectOnMessageCallback couldn't fire a worker(id=%d) object's `onmessage` callback because the worker has been Garbage Collected.",
-                    workerId);
-            CallbackHandlers::id2WorkerMap.erase(workerId);
-            return;
-        }
-
-        auto worker = Local<Object>::New(isolate, *workerPersistent);
-
-        auto context = isolate->GetCurrentContext();
-        auto callback = worker->Get(context, ArgConverter::ConvertToV8String(isolate,
-                                                                             "onmessage")).ToLocalChecked();
-        auto isEmpty = callback.IsEmpty();
-        auto isFunction = callback->IsFunction();
-
-        if (!isEmpty && isFunction) {
-            auto msgString = ArgConverter::jstringToV8String(isolate, message).As<String>();
-            Local<Value> msg;
-            JSON::Parse(context, msgString).ToLocal(&msg);
-
-            auto obj = Object::New(isolate);
-            obj->DefineOwnProperty(context,
-                                   ArgConverter::ConvertToV8String(isolate, "data"), msg,
-                                   PropertyAttribute::ReadOnly);
-            Local<Value> args1[] = {obj};
-
-            auto func = callback.As<Function>();
-
-            func->Call(context, Undefined(isolate), 1, args1);
-        } else {
-            DEBUG_WRITE(
-                    "MAIN: WorkerObjectOnMessageCallback couldn't fire a worker(id=%d) object's `onmessage` callback because it isn't implemented.",
-                    workerId);
-        }
     } catch (NativeScriptException &ex) {
         ex.ReThrowToV8();
     } catch (std::exception e) {
@@ -1347,14 +1358,13 @@ CallbackHandlers::WorkerObjectTerminateCallback(const v8::FunctionCallbackInfo<v
         V8SetPrivateValue(isolate, thiz, ArgConverter::ConvertToV8String(isolate, "isTerminated"),
                           Boolean::New(isolate, true));
 
-        JEnv env;
-        auto mId = env.GetStaticMethodID(RUNTIME_CLASS, "workerObjectTerminate",
-                                         "(I)V");
+        auto wrapper = WorkerWrapper::GetById(id);
+        if (wrapper != nullptr) {
+            wrapper->Terminate();
+        }
 
-        env.CallStaticVoidMethod(RUNTIME_CLASS, mId, id);
-
-        // Remove persistent handle from id2WorkerMap
-        CallbackHandlers::ClearWorkerPersistent(id);
+        // Reset the persistent Worker object handle and drop the registry entry
+        WorkerWrapper::ClearWorkerOnParent(id);
     } catch (NativeScriptException &ex) {
         ex.ReThrowToV8();
     } catch (std::exception e) {
@@ -1414,11 +1424,10 @@ void CallbackHandlers::WorkerGlobalCloseCallback(const v8::FunctionCallbackInfo<
             CallWorkerScopeOnErrorHandle(isolate, tc);
         }
 
-        JEnv env;
-        auto mId = env.GetStaticMethodID(RUNTIME_CLASS, "workerScopeClose",
-                                         "()V");
-
-        env.CallStaticVoidMethod(RUNTIME_CLASS, mId);
+        auto wrapper = WorkerWrapper::FromIsolate(isolate);
+        if (wrapper != nullptr) {
+            wrapper->Close();
+        }
     } catch (NativeScriptException &ex) {
         ex.ReThrowToV8();
     } catch (std::exception e) {
@@ -1432,8 +1441,54 @@ void CallbackHandlers::WorkerGlobalCloseCallback(const v8::FunctionCallbackInfo<
     }
 }
 
+/*
+ * Extracts message/filename/stack/line info from a TryCatch into plain
+ * strings that can safely cross to the main thread. Robust against empty
+ * v8 messages (e.g. when execution was terminated).
+ */
+static void ExtractTryCatchInfo(Isolate *isolate, Local<Context> context, TryCatch &tc,
+                                std::string &message, std::string &source,
+                                std::string &stackTrace, int &lineno) {
+    message = "";
+    source = "";
+    stackTrace = "";
+    lineno = 0;
+
+    if (!tc.Message().IsEmpty()) {
+        lineno = tc.Message()->GetLineNumber(context).FromMaybe(0);
+        message = ArgConverter::ConvertToString(tc.Message()->Get());
+        Local<String> src;
+        if (tc.Message()->GetScriptResourceName()->ToString(context).ToLocal(&src)) {
+            source = ArgConverter::ConvertToString(src);
+        }
+    }
+
+    if (message.empty() && !tc.Exception().IsEmpty()) {
+        Local<String> exStr;
+        if (tc.Exception()->ToDetailString(context).ToLocal(&exStr)) {
+            message = ArgConverter::ConvertToString(exStr);
+        }
+    }
+
+    Local<Value> outStackTrace = tc.StackTrace(context).FromMaybe(Local<Value>());
+    if (!outStackTrace.IsEmpty()) {
+        Local<String> stackTraceStr =
+                outStackTrace->ToDetailString(context).FromMaybe(Local<String>());
+        if (!stackTraceStr.IsEmpty()) {
+            stackTrace = ArgConverter::ConvertToString(stackTraceStr);
+        }
+    }
+}
+
 void CallbackHandlers::CallWorkerScopeOnErrorHandle(Isolate *isolate, TryCatch &tc) {
     try {
+        auto wrapper = WorkerWrapper::FromIsolate(isolate);
+        if (wrapper != nullptr && wrapper->IsTerminating()) {
+            // The worker was terminated mid-execution (e.g. terminate()
+            // interrupting a busy loop) - nothing to report.
+            return;
+        }
+
         TryCatch innerTc(isolate);
 
         // See if `onerror` handle is implemented
@@ -1446,7 +1501,7 @@ void CallbackHandlers::CallWorkerScopeOnErrorHandle(Isolate *isolate, TryCatch &
         auto isEmpty = callback.IsEmpty();
         auto isFunction = callback->IsFunction();
 
-        if (!isEmpty && isFunction) {
+        if (!isEmpty && isFunction && !tc.Message().IsEmpty()) {
             auto msg = tc.Message()->Get();
             Local<Value> args1[] = {msg};
 
@@ -1462,34 +1517,22 @@ void CallbackHandlers::CallWorkerScopeOnErrorHandle(Isolate *isolate, TryCatch &
             }
         }
 
+        if (wrapper == nullptr) {
+            return;
+        }
+
+        std::string message, source, stackTrace;
+        int lineno;
+
         // will account for exceptions thrown inside the error handler
         if (innerTc.HasCaught()) {
-            auto lno = innerTc.Message()->GetLineNumber(context).ToChecked();
-            auto msg = innerTc.Message()->Get();
-            Local<Value> outStackTrace = innerTc.StackTrace(context).FromMaybe(Local<Value>());
-            Local<String> stackTrace;
-            if (!outStackTrace.IsEmpty()) {
-                stackTrace = outStackTrace->ToDetailString(context).FromMaybe(Local<String>());
-            }
-            auto source = innerTc.Message()->GetScriptResourceName()->ToString(
-                    context).ToLocalChecked();
-
-            auto runtime = Runtime::GetRuntime(isolate);
-            runtime->PassUncaughtExceptionFromWorkerToMainHandler(msg, stackTrace, source, lno);
+            ExtractTryCatchInfo(isolate, context, innerTc, message, source, stackTrace, lineno);
+            wrapper->PassUncaughtExceptionFromWorkerToParent(message, source, stackTrace, lineno);
         }
 
-        // throw so that it may bubble up to main
-        auto lno = tc.Message()->GetLineNumber(context).ToChecked();
-        auto msg = tc.Message()->Get();
-        auto source = tc.Message()->GetScriptResourceName()->ToString(context).ToLocalChecked();
-        Local<Value> outStackTrace = tc.StackTrace(context).FromMaybe(Local<Value>());
-        Local<String> stackTrace;
-        if (!outStackTrace.IsEmpty()) {
-            stackTrace = outStackTrace->ToDetailString(context).FromMaybe(Local<String>());
-        }
-
-        auto runtime = Runtime::GetRuntime(isolate);
-        runtime->PassUncaughtExceptionFromWorkerToMainHandler(msg, stackTrace, source, lno);
+        // bubble up to the main thread's Worker object `onerror`
+        ExtractTryCatchInfo(isolate, context, tc, message, source, stackTrace, lineno);
+        wrapper->PassUncaughtExceptionFromWorkerToParent(message, source, stackTrace, lineno);
     } catch (NativeScriptException &ex) {
         ex.ReThrowToV8();
     } catch (std::exception e) {
@@ -1501,119 +1544,6 @@ void CallbackHandlers::CallWorkerScopeOnErrorHandle(Isolate *isolate, TryCatch &
         NativeScriptException nsEx(std::string("Error: c++ exception!"));
         nsEx.ReThrowToV8();
     }
-}
-
-void
-CallbackHandlers::CallWorkerObjectOnErrorHandle(Isolate *isolate, jint workerId, jstring message,
-                                                jstring stackTrace, jstring filename, jint lineno,
-                                                jstring threadName) {
-    try {
-        auto workerFound = CallbackHandlers::id2WorkerMap.find(workerId);
-
-        if (workerFound == CallbackHandlers::id2WorkerMap.end()) {
-            // TODO: Pete: Throw exception
-            DEBUG_WRITE(
-                    "MAIN: CallWorkerObjectOnErrorHandle no worker instance was found with workerId=%d.",
-                    workerId);
-            return;
-        }
-
-        auto workerPersistent = workerFound->second;
-
-        if (workerPersistent->IsEmpty()) {// Object has been collected
-            DEBUG_WRITE(
-                    "MAIN: WorkerObjectOnMessageCallback couldn't fire a worker(id=%d) object's `onmessage` callback because the worker has been Garbage Collected.",
-                    workerId);
-            CallbackHandlers::id2WorkerMap.erase(workerId);
-            return;
-        }
-
-        auto worker = Local<Object>::New(isolate, *workerPersistent);
-
-        auto context = isolate->GetCurrentContext();
-        auto callback = worker->Get(context, ArgConverter::ConvertToV8String(isolate,
-                                                                             "onerror")).ToLocalChecked();
-        auto isEmpty = callback.IsEmpty();
-        auto isFunction = callback->IsFunction();
-
-        if (!isEmpty && isFunction) {
-            auto errEvent = Object::New(isolate);
-            errEvent->Set(context,
-                          ArgConverter::ConvertToV8String(isolate, "message"),
-                          ArgConverter::jstringToV8String(isolate, message));
-            errEvent->Set(context,
-                          ArgConverter::ConvertToV8String(isolate, "stackTrace"),
-                          ArgConverter::jstringToV8String(isolate, stackTrace));
-            errEvent->Set(context,
-                          ArgConverter::ConvertToV8String(isolate, "filename"),
-                          ArgConverter::jstringToV8String(isolate, filename));
-            errEvent->Set(context,
-                          ArgConverter::ConvertToV8String(isolate, "lineno"),
-                          Number::New(isolate, lineno));
-
-            Local<Value> args1[] = {errEvent};
-
-            auto func = callback.As<Function>();
-
-            // Handle exceptions thrown in onmessage with the worker.onerror handler, if present
-            Local<Value> result;
-            func->Call(context, Undefined(isolate), 1, args1).ToLocal(&result);
-            if (!result.IsEmpty() && result->BooleanValue(isolate)) {
-                // Do nothing, exception is handled and does not need to be raised to application level
-                return;
-            }
-        }
-
-        // Exception wasn't handled, or is critical -> Throw exception
-        auto strMessage = ArgConverter::jstringToString(message);
-        auto strFilename = ArgConverter::jstringToString(filename);
-        auto strThreadname = ArgConverter::jstringToString(threadName);
-        auto strStackTrace = ArgConverter::jstringToString(stackTrace);
-
-        DEBUG_WRITE(
-                "Unhandled exception in '%s' thread. file: %s, line %d, message: %s\nStackTrace: %s",
-                strThreadname.c_str(), strFilename.c_str(), lineno, strMessage.c_str(),
-                strStackTrace.c_str());
-
-        // Do not throw exception?
-//    stringstream ss;
-//    ss << endl << "Unhandled exception in '" << strThreadname << "' thread. file: " << strFilename <<
-//    ", line: " << lineno << endl << strMessage << endl;
-//    NativeScriptException ex(ss.str());
-//    throw ex;
-    } catch (NativeScriptException &ex) {
-        ex.ReThrowToV8();
-    } catch (std::exception e) {
-        stringstream ss;
-        ss << "Error: c++ exception: " << e.what() << endl;
-        NativeScriptException nsEx(ss.str());
-        nsEx.ReThrowToV8();
-    } catch (...) {
-        NativeScriptException nsEx(std::string("Error: c++ exception!"));
-        nsEx.ReThrowToV8();
-    }
-}
-
-void CallbackHandlers::ClearWorkerPersistent(int workerId) {
-    DEBUG_WRITE("ClearWorkerPersistent called for workerId=%d", workerId);
-
-    auto workerFound = CallbackHandlers::id2WorkerMap.find(workerId);
-
-    if (workerFound == CallbackHandlers::id2WorkerMap.end()) {
-        DEBUG_WRITE(
-                "MAIN | WORKER: ClearWorkerPersistent no worker instance was found with workerId=%d ! The worker may already be terminated.",
-                workerId);
-        return;
-    }
-
-    auto workerPersistent = workerFound->second;
-    workerPersistent->Reset();
-
-    id2WorkerMap.erase(workerId);
-}
-
-void CallbackHandlers::TerminateWorkerThread(Isolate *isolate) {
-    isolate->TerminateExecution();
 }
 
 void CallbackHandlers::RemoveIsolateEntries(v8::Isolate *isolate) {
@@ -1791,9 +1721,6 @@ std::atomic_int64_t CallbackHandlers::count_ = {0};
 std::atomic_uint64_t CallbackHandlers::frameCallbackCount_ = {0};
 
 
-int CallbackHandlers::nextWorkerId = 0;
-robin_hood::unordered_map<int, Persistent<Object> *> CallbackHandlers::id2WorkerMap;
-
 short CallbackHandlers::MAX_JAVA_STRING_ARRAY_LENGTH = 100;
 jclass CallbackHandlers::RUNTIME_CLASS = nullptr;
 jclass CallbackHandlers::JAVA_LANG_STRING = nullptr;
@@ -1803,7 +1730,6 @@ jmethodID CallbackHandlers::MAKE_INSTANCE_STRONG_ID = nullptr;
 jmethodID CallbackHandlers::GET_TYPE_METADATA = nullptr;
 jmethodID CallbackHandlers::ENABLE_VERBOSE_LOGGING_METHOD_ID = nullptr;
 jmethodID CallbackHandlers::DISABLE_VERBOSE_LOGGING_METHOD_ID = nullptr;
-jmethodID CallbackHandlers::INIT_WORKER_METHOD_ID = nullptr;
 
 
 NumericCasts CallbackHandlers::castFunctions;
